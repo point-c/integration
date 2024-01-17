@@ -1,0 +1,25 @@
+{
+    point-c {
+        wgclient {{ .NetworkName }} {
+            ip {{ .IP }}
+            endpoint {{ .Endpoint }}:{{ .EndpointPort }}
+            private {{ txt .Private }}
+            public {{ txt .Public }}
+            shared {{ txt .Shared }}
+        }
+    }
+    servers :80 {
+        listener_wrappers {
+            merge {
+                point-c {{ .NetworkName }} 80
+            }
+        }
+    }
+}
+
+:80 {
+    log
+    route {
+        rand
+    }
+}

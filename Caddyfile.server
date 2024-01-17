@@ -1,0 +1,25 @@
+{
+    default_bind stub://0.0.0.0
+    point-c {
+        wgserver {{ .NetworkName }} {
+            ip {{ .IP }}
+            port {{ .Port }}
+            private {{ txt .Private }}
+            {{ range .Peers -}}
+            peer {{ .NetworkName }} {
+                ip {{ .IP }}
+                public {{ txt .Public }}
+                shared {{ txt .Shared }}
+            }
+            {{ end -}}
+        }
+    }
+    point-c netops {
+        forward {{ .FwdNetworkName }} {
+            tcp 80:80
+        }
+    }
+}
+
+:80 {
+}
