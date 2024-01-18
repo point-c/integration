@@ -1,10 +1,15 @@
-package integration
+package caddyfile
 
 import (
 	"fmt"
 	"github.com/caddyserver/caddy/v2/caddyconfig"
-	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
-	"github.com/point-c/integration/errs"
+	_ "github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
+	_ "github.com/caddyserver/caddy/v2/modules/standard"
+	_ "github.com/point-c/caddy"
+	_ "github.com/point-c/caddy-randhandler"
+	_ "github.com/point-c/caddy-wg"
+	"github.com/point-c/integration/pkg/errs"
+	"github.com/point-c/integration/pkg/templates"
 	"github.com/point-c/wgapi"
 	"github.com/stretchr/testify/require"
 	"net"
@@ -22,17 +27,15 @@ func TestCaddyfile(t *testing.T) {
 
 	tt := []struct {
 		Name string
-		Tmpl string
-		Dot  any
+		Dot  templates.Dot
 		Exp  []byte
 	}{
 		{
 			Name: "client",
-			Tmpl: CaddyfileClient,
-			Dot: DotClient{
+			Dot: templates.DotClient{
 				NetworkName:  clientName,
 				IP:           clientIP,
-				Endpoint:     "1.1.1.1",
+				Endpoint:     "localhost",
 				EndpointPort: wgPort,
 				Private:      clientPriv,
 				Public:       serverPub,
@@ -44,6 +47,7 @@ func TestCaddyfile(t *testing.T) {
 						Servers: map[string]CfgAppsHttpServers{
 							"srv0": {
 								Listen: []string{":80"},
+								Logs:   new(struct{}),
 								ListenerWrappers: []CfgAppsHttpServersLW{
 									{
 										Listeners: []CfgAppsHttpServersLWL{
@@ -75,34 +79,13 @@ func TestCaddyfile(t *testing.T) {
 									},
 								},
 							},
-							"srv1": {
-								Listen: []string{":81"},
-								Routes: []CfgAppsHttpServersRoutes{
-									{
-										Handle: []CfgAppsHttpServersRoutesHandle{
-											{
-												Handler: "subroute",
-												Routes: []CfgAppsHttpServersRoutes{
-													{
-														Handle: []CfgAppsHttpServersRoutesHandle{
-															{
-																Handler: "rand",
-															},
-														},
-													},
-												},
-											},
-										},
-									},
-								},
-							},
 						},
 					},
 					PointC: CfgAppsPointc{
 						Networks: []any{
 							CfgAppsPointcNetworksClient{
 								Name:      clientName,
-								Endpoint:  fmt.Sprintf("1.1.1.1:%d", wgPort),
+								Endpoint:  fmt.Sprintf("localhost:%d", wgPort),
 								IP:        clientIP.String(),
 								Preshared: string(errs.Must(shared.MarshalText())(t)),
 								Public:    string(errs.Must(serverPub.MarshalText())(t)),
@@ -116,13 +99,12 @@ func TestCaddyfile(t *testing.T) {
 		},
 		{
 			Name: "server",
-			Tmpl: CaddyfileServer,
-			Dot: DotServer{
+			Dot: templates.DotServer{
 				NetworkName:    serverName,
 				IP:             serverIP,
 				Port:           wgPort,
 				Private:        serverPriv,
-				Peers:          []DotServerPeer{{NetworkName: clientName, IP: clientIP, Public: clientPub, Shared: shared}},
+				Peers:          []templates.DotServerPeer{{NetworkName: clientName, IP: clientIP, Public: clientPub, Shared: shared}},
 				FwdNetworkName: clientName,
 			},
 			Exp: caddyconfig.JSON(Cfg{
@@ -131,45 +113,6 @@ func TestCaddyfile(t *testing.T) {
 						Servers: map[string]CfgAppsHttpServers{
 							"srv0": {
 								Listen: []string{"stub://0.0.0.0:80"},
-								Routes: []CfgAppsHttpServersRoutes{
-									{
-										Handle: []CfgAppsHttpServersRoutesHandle{
-											{
-												Handler: "subroute",
-												Routes: []CfgAppsHttpServersRoutes{
-													{
-														Handle: []CfgAppsHttpServersRoutesHandle{
-															{
-																Handler: "rand",
-															},
-														},
-													},
-												},
-											},
-										},
-									},
-								},
-							},
-							"srv1": {
-								Listen: []string{"stub://0.0.0.0:81"},
-								Routes: []CfgAppsHttpServersRoutes{
-									{
-										Handle: []CfgAppsHttpServersRoutesHandle{
-											{
-												Handler: "subroute",
-												Routes: []CfgAppsHttpServersRoutes{
-													{
-														Handle: []CfgAppsHttpServersRoutesHandle{
-															{
-																Handler: "rand",
-															},
-														},
-													},
-												},
-											},
-										},
-									},
-								},
 							},
 						},
 					},
@@ -210,8 +153,7 @@ func TestCaddyfile(t *testing.T) {
 	}
 	for _, tt := range tt {
 		t.Run(tt.Name, func(t *testing.T) {
-			b := ApplyTemplate(t, tt.Tmpl, tt.Dot)
-			b = caddyfile.Format(b)
+			b := tt.Dot.ApplyTemplate(t)
 			adapter := caddyconfig.GetAdapter("caddyfile")
 			require.NotNil(t, adapter)
 			b, warn, err := adapter.Adapt(b, nil)
@@ -271,8 +213,9 @@ type (
 	}
 	CfgAppsHttpServers struct {
 		Listen           []string                   `json:"listen"`
-		Routes           []CfgAppsHttpServersRoutes `json:"routes"`
+		Routes           []CfgAppsHttpServersRoutes `json:"routes,omitempty"`
 		ListenerWrappers []CfgAppsHttpServersLW     `json:"listener_wrappers,omitempty"`
+		Logs             *struct{}                  `json:"logs,omitempty"`
 	}
 	CfgAppsHttpServersLW struct {
 		Listeners []CfgAppsHttpServersLWL `json:"listeners"`

@@ -1,0 +1,7 @@
+{
+  "caddy": "2.7.6",
+  "mods": [
+    "github.com/point-c/caddy@v0.0.13",
+    "github.com/point-c/caddy-wg@v0.0.1"
+  ]
+}

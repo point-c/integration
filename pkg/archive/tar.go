@@ -3,30 +3,29 @@ package archive
 import (
 	"archive/tar"
 	"bytes"
-	"github.com/point-c/integration/errs"
+	errs2 "github.com/point-c/integration/pkg/errs"
 	"io"
 	"os"
-	"testing"
 )
 
 type Tar struct{}
 
 type tarWriter struct {
-	t testing.TB
+	t errs2.Testing
 	w *tar.Writer
 }
 
-func (Tar) New(t testing.TB, w io.Writer) Writer {
+func (Tar) New(t errs2.Testing, w io.Writer) Writer {
 	t.Helper()
 	return &tarWriter{t: t, w: tar.NewWriter(w)}
 }
 
 func (w *tarWriter) Close() error { w.t.Helper(); return w.w.Close() }
 
-func (w *tarWriter) WriteFile(t testing.TB, f FileHeader, r io.Reader) {
+func (w *tarWriter) WriteFile(t errs2.Testing, f FileHeader, r io.Reader) {
 	w.t.Helper()
-	b := bytes.NewReader(errs.Must(io.ReadAll(r))(t))
-	errs.Check(t, w.w.WriteHeader(&tar.Header{
+	b := bytes.NewReader(errs2.Must(io.ReadAll(r))(t))
+	errs2.Check(t, w.w.WriteHeader(&tar.Header{
 		Typeflag:   tar.TypeReg,
 		Name:       f.EntryName(),
 		Size:       int64(b.Len()),
@@ -35,12 +34,12 @@ func (w *tarWriter) WriteFile(t testing.TB, f FileHeader, r io.Reader) {
 		AccessTime: f.EntryTime(),
 		ChangeTime: f.EntryTime(),
 	}))
-	errs.Must(io.Copy(w.w, b))(t)
+	errs2.Must(io.Copy(w.w, b))(t)
 }
 
-func (w *tarWriter) WriteDir(t testing.TB, f FileHeader) {
+func (w *tarWriter) WriteDir(t errs2.Testing, f FileHeader) {
 	w.t.Helper()
-	errs.Check(t, w.w.WriteHeader(&tar.Header{
+	errs2.Check(t, w.w.WriteHeader(&tar.Header{
 		Typeflag:   tar.TypeDir,
 		Name:       f.EntryName(),
 		Mode:       int64(os.ModePerm),

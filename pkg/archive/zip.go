@@ -2,35 +2,34 @@ package archive
 
 import (
 	"archive/zip"
-	"github.com/point-c/integration/errs"
+	errs2 "github.com/point-c/integration/pkg/errs"
 	"io"
 	"io/fs"
 	"os"
-	"testing"
 )
 
 type Zip struct{}
 
 type zipWriter struct {
-	t testing.TB
+	t errs2.Testing
 	w *zip.Writer
 }
 
-func (Zip) New(t testing.TB, w io.Writer) Writer {
+func (Zip) New(t errs2.Testing, w io.Writer) Writer {
 	t.Helper()
 	return &zipWriter{t: t, w: zip.NewWriter(w)}
 }
 
 func (w *zipWriter) Close() error { w.t.Helper(); return w.w.Close() }
 
-func (w *zipWriter) WriteFile(t testing.TB, f FileHeader, r io.Reader) {
+func (w *zipWriter) WriteFile(t errs2.Testing, f FileHeader, r io.Reader) {
 	w.t.Helper()
-	errs.Must(io.Copy(errs.Must(w.w.CreateHeader(zipHeader(f, zip.Deflate, os.ModePerm)))(t), r))(t)
+	errs2.Must(io.Copy(errs2.Must(w.w.CreateHeader(zipHeader(f, zip.Deflate, os.ModePerm)))(t), r))(t)
 }
 
-func (w *zipWriter) WriteDir(t testing.TB, f FileHeader) {
+func (w *zipWriter) WriteDir(t errs2.Testing, f FileHeader) {
 	w.t.Helper()
-	errs.Must(w.w.CreateHeader(zipHeader(f, zip.Store, os.ModePerm|os.ModeDir)))(t)
+	errs2.Must(w.w.CreateHeader(zipHeader(f, zip.Store, os.ModePerm|os.ModeDir)))(t)
 }
 
 func zipHeader(f FileHeader, method uint16, mode fs.FileMode) *zip.FileHeader {

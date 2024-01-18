@@ -1,6 +1,7 @@
-package integration
+package docker
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/binary"
@@ -11,8 +12,10 @@ import (
 	_ "github.com/point-c/caddy"
 	_ "github.com/point-c/caddy-randhandler"
 	_ "github.com/point-c/caddy-wg"
-	"github.com/point-c/integration/archive"
-	"github.com/point-c/integration/errs"
+	"github.com/point-c/integration/pkg/archive"
+	"github.com/point-c/integration/pkg/cntx"
+	"github.com/point-c/integration/pkg/errs"
+	"github.com/point-c/integration/pkg/templates"
 	"github.com/point-c/simplewg"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -22,9 +25,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -34,26 +35,28 @@ const (
 	CaddyfileName  = "Caddyfile"
 )
 
-func TestPointc(t *testing.T) {
-	dockerfile := archive.Entry[[]byte]{
-		Name:    DockerfileName,
-		Time:    time.Now(),
-		Content: DeJSON[DotDockerfile](t, Config).ApplyTemplate(t),
-	}
+var (
+	ServerPort uint16
+	ClientPort uint16
+	Ctx        *cntx.TC
+)
 
-	ctx, cancel := TestingContext(t, context.Background())
-	defer cancel()
-	ctx, cancel = signal.NotifyContext(ctx, os.Kill, os.Interrupt, syscall.SIGKILL, syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+func TestMain(m *testing.M) {
+	t := errs.NewTestMain(m)
+	defer t.Exit()
+	Ctx = cntx.Context(t, context.Background(), time.Minute*2, time.Minute*2)
+	defer Ctx.Cancel()
 
-	serverCfg, clientCfg := NewDotPair(t)
-	WriteDebugZip(t, dockerfile, serverCfg, clientCfg)
+	clientDockerfile, serverDockerfile := GetDockerfiles(t)
+	serverCfg, clientCfg := templates.NewDotPair(t)
+	writeDebugZip := WriteDebugZip(t, clientDockerfile, serverDockerfile, serverCfg, clientCfg)
+	writeDebugZip()
+	defer writeDebugZip()
 
-	intNet, cleanup := GetInternalNet(t, ctx)
+	intNet, cleanup := GetInternalNet(t, Ctx)
 	defer cleanup()
-
-	server, cleanup := GetCaddy(t, ctx, testcontainers.ContainerRequest{
-		FromDockerfile: GetBuildContext(t, dockerfile)(serverCfg),
+	server, cleanup := GetCaddy(t, Ctx, testcontainers.ContainerRequest{
+		FromDockerfile: GetBuildContext(t, serverDockerfile)(serverCfg),
 		Name:           serverCfg.NetworkName,
 		ExposedPorts:   []string{"80/tcp"},
 		WaitingFor: wait.ForAll(
@@ -68,10 +71,10 @@ func TestPointc(t *testing.T) {
 
 	clientCfg.Endpoint = serverCfg.NetworkName
 	clientCfg.EndpointPort = 51820
-	client, cleanup := GetCaddy(t, ctx, testcontainers.ContainerRequest{
+	client, cleanup := GetCaddy(t, Ctx, testcontainers.ContainerRequest{
 		Name:           clientCfg.NetworkName,
 		Networks:       []string{"localhost", intNet.Name},
-		FromDockerfile: GetBuildContext(t, dockerfile)(clientCfg),
+		FromDockerfile: GetBuildContext(t, clientDockerfile)(clientCfg),
 		ExposedPorts:   []string{"80/tcp"},
 		WaitingFor: wait.ForAll(
 			wait.ForLog(`{"level":"info","ts":[0-9]+\.[0-9]+,"msg":"Interface state changed","Old":"Down","Want":"Up","Now":"Up"}`).AsRegexp(),
@@ -80,11 +83,13 @@ func TestPointc(t *testing.T) {
 		),
 	})
 	defer cleanup()
-	RunSubtests(t, ctx, errs.Must(server.MappedPort(ctx, "80/tcp"))(t).Int(), errs.Must(client.MappedPort(ctx, "80/tcp"))(t).Int())
-	require.NoError(t, ctx.Err())
+	ServerPort = uint16(errs.Must(server.MappedPort(Ctx.Starting(), "80/tcp"))(t).Int())
+	ClientPort = uint16(errs.Must(client.MappedPort(Ctx.Starting(), "80/tcp"))(t).Int())
+	require.NoError(t, Ctx.Starting().Err())
+	t.Run()
 }
 
-func RunSubtests(t *testing.T, ctx context.Context, serverPort, clientPort int) {
+func TestRandDownload(t *testing.T) {
 	seed, seedStr := MakeSeed()
 	tt := []struct {
 		Bytes     uint
@@ -112,8 +117,8 @@ func RunSubtests(t *testing.T, ctx context.Context, serverPort, clientPort int) 
 		t.Run(fmt.Sprintf("requesting %s with seed of %s", sizeStr, seedStr), func(t *testing.T) {
 			var w simplewg.Wg
 			var clientR, serverR []byte
-			w.Go(func() { clientR = GetRandBytes(t, "client", ctx, uint16(clientPort), seed, size) })
-			w.Go(func() { serverR = GetRandBytes(t, "server", ctx, uint16(serverPort), seed, size) })
+			w.Go(func() { clientR = GetRandBytes(t, "client", Ctx.Starting(), ClientPort, seed, size) })
+			w.Go(func() { serverR = GetRandBytes(t, "server", Ctx.Starting(), ServerPort, seed, size) })
 			w.Wait()
 			require.Equal(t, clientR, serverR)
 		})
@@ -136,7 +141,7 @@ func ParseSize(gb, mb, kb, b uint) (size int64, str string) {
 	return
 }
 
-func GetRandBytes(t testing.TB, requestedName string, ctx context.Context, port uint16, seed, size int64) []byte {
+func GetRandBytes(t errs.Testing, requestedName string, ctx context.Context, port uint16, seed, size int64) []byte {
 	req := errs.Must(http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%d", int(port)), nil))(t).WithContext(ctx)
 	req.Header = http.Header{
 		"Rand-Seed":        []string{fmt.Sprintf("%d", seed)},
@@ -152,57 +157,61 @@ func GetRandBytes(t testing.TB, requestedName string, ctx context.Context, port 
 	return errs.Must(io.ReadAll(resp.Body))(t)
 }
 
-func WriteDebugZip(t testing.TB, dockerfile archive.FileHeader, serverCfg, clientCfg Dot) func() {
+func WriteDebugZip(t errs.Testing, clientDockerfile, serverDockerfile archive.Entry[[]byte], serverCfg, clientCfg templates.Dot) func() {
 	now := time.Now()
 	_ = os.Mkdir("test_output", os.ModePerm)
 	return func() {
 		f := errs.Must(os.Create(filepath.Join("test_output", now.Format("2006-01-02T15:04:05Z07:00")+".zip")))(t)
 		defer errs.Defer(t, f.Close)
-		errs.Must(io.Copy(f, archive.Archive[archive.Zip](t, dockerfile,
-			archive.Entry[[]byte]{Name: "server/Caddyfile", Time: now, Content: serverCfg.ApplyTemplate(t)},
+		archive.Archive[archive.Zip](t, f,
+			archive.Entry[[]byte]{Name: "server/" + DockerfileName, Time: serverDockerfile.EntryTime(), Content: serverDockerfile.EntryContent()},
+			archive.Entry[[]byte]{Name: "server/" + CaddyfileName, Time: now, Content: serverCfg.ApplyTemplate(t)},
 			//archive.Entry[[]byte]{Name: "server/stdout.log", Time: now, Content: serverLogs.StdoutFile()},
 			//archive.Entry[[]byte]{Name: "server/stderr.log", Time: now, Content: serverLogs.StderrFile()},
-			archive.Entry[[]byte]{Name: "client/Caddyfile", Time: now, Content: clientCfg.ApplyTemplate(t)},
+			archive.Entry[[]byte]{Name: "client/" + DockerfileName, Time: clientDockerfile.EntryTime(), Content: clientDockerfile.EntryContent()},
+			archive.Entry[[]byte]{Name: "client/" + CaddyfileName, Time: now, Content: clientCfg.ApplyTemplate(t)},
 			//archive.Entry[[]byte]{Name: "client/stdout.log", Time: now, Content: clientLogs.StdoutFile()},
 			//archive.Entry[[]byte]{Name: "client/stderr.log", Time: now, Content: clientLogs.StderrFile()},
-		)))(t)
+		)
 	}
 }
 
-func GetBuildContext(t testing.TB, dockerfile archive.Entry[[]byte]) func(Dot) testcontainers.FromDockerfile {
-	t.Helper()
-	return func(d Dot) testcontainers.FromDockerfile {
-		t.Helper()
-		return testcontainers.FromDockerfile{
-			ContextArchive: archive.Archive[archive.Tar](t, dockerfile, archive.Entry[[]byte]{
-				Name:    CaddyfileName,
-				Time:    time.Now(),
-				Content: d.ApplyTemplate(t),
-			}),
-		}
+func GetBuildContext(t errs.Testing, dockerfile archive.Entry[[]byte]) func(templates.Dot) testcontainers.FromDockerfile {
+	return func(d templates.Dot) testcontainers.FromDockerfile {
+		var buf bytes.Buffer
+		archive.Archive[archive.Tar](t, &buf, dockerfile, archive.Entry[[]byte]{
+			Name:    CaddyfileName,
+			Time:    time.Now(),
+			Content: d.ApplyTemplate(t),
+		})
+		return testcontainers.FromDockerfile{ContextArchive: &buf}
 	}
 }
 
-func GetInternalNet(t testing.TB, ctx context.Context) (*testcontainers.DockerNetwork, func()) {
-	t.Helper()
-	internalNet := errs.Must(network.New(ctx, network.WithCheckDuplicate(), network.WithInternal(), network.WithAttachable()))(t)
-	return internalNet, func() {
-		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		errs.Check(t, internalNet.Remove(ctx))
-	}
+func GetInternalNet(t errs.Testing, ctx *cntx.TC) (*testcontainers.DockerNetwork, func()) {
+	internalNet := errs.Must(network.New(ctx.Starting(), network.WithCheckDuplicate(), network.WithInternal(), network.WithAttachable()))(t)
+	return internalNet, func() { errs.Check(t, internalNet.Remove(ctx.Terminating())) }
 }
 
-func GetCaddy(t testing.TB, ctx context.Context, req testcontainers.ContainerRequest) (testcontainers.Container, func()) {
+func GetCaddy(t errs.Testing, ctx *cntx.TC, req testcontainers.ContainerRequest) (testcontainers.Container, func()) {
 	t.Helper()
 	log.Printf("building container with config")
-	c := errs.Must(testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req}))(t)
-	errs.Check(t, c.Start(ctx))
+	c := errs.Must(testcontainers.GenericContainer(ctx.Starting(), testcontainers.GenericContainerRequest{ContainerRequest: req}))(t)
+	errs.Check(t, c.Start(ctx.Starting()))
 	return c, func() {
-		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		errs.Check(t, c.Terminate(ctx))
+		errs.Check(t, c.Terminate(ctx.Terminating()))
 	}
+}
+
+func GetDockerfiles(t errs.Testing) (server, client archive.Entry[[]byte]) {
+	now := time.Now()
+	return archive.Entry[[]byte]{
+			Name:    DockerfileName,
+			Time:    now,
+			Content: templates.DeJSON[templates.DotDockerfile](t, templates.ClientConfig).ApplyTemplate(t),
+		}, archive.Entry[[]byte]{
+			Name:    DockerfileName,
+			Time:    now,
+			Content: templates.DeJSON[templates.DotDockerfile](t, templates.ServerConfig).ApplyTemplate(t),
+		}
 }
