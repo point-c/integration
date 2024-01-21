@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "name": "{{ .Client }}",
+    "server": "//{{ .Client }}:80",
+    "dlURL": "garbage.php",
+    "ulURL": "empty.php",
+    "pingURL": "empty.php",
+    "getIpURL": "getIP.php"
+  },
+  {
+    "id": 2,
+    "name": "{{ .Server }}",
+    "server": "//{{ .Server }}:80",
+    "dlURL": "garbage.php",
+    "ulURL": "empty.php",
+    "pingURL": "empty.php",
+    "getIpURL": "getIP.php"
+  }
+]

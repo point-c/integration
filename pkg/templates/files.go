@@ -4,7 +4,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
-	errs2 "github.com/point-c/integration/pkg/errs"
+	"github.com/point-c/integration/pkg/errs"
 )
 
 var (
@@ -20,8 +20,7 @@ var (
 	CaddyfileServer string
 )
 
-func DeJSON[T any](t errs2.Testing, b []byte) (v T) {
-	t.Helper()
-	errs2.Check(t, json.NewDecoder(bytes.NewReader(b)).Decode(&v))
+func DeJSON[T any](t errs.Testing, b []byte) (v T) {
+	errs.Check(t, json.NewDecoder(bytes.NewReader(b)).Decode(&v))
 	return
 }

@@ -19,7 +19,5 @@
 
 :80 {
     log
-    route {
-        rand
-    }
+    {{ .Directive }}
 }

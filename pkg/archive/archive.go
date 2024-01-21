@@ -2,38 +2,42 @@ package archive
 
 import (
 	"bytes"
-	errs2 "github.com/point-c/integration/pkg/errs"
+	"github.com/point-c/integration/pkg/errs"
 	"io"
+	"strings"
 )
 
 type (
 	Archiver interface {
-		New(errs2.Testing, io.Writer) Writer
+		New(errs.Testing, io.Writer) Writer
 	}
 	Writer interface {
 		io.Closer
-		WriteFile(errs2.Testing, FileHeader, io.Reader)
-		WriteDir(errs2.Testing, FileHeader)
+		WriteFile(errs.Testing, FileHeader, io.Reader)
+		WriteDir(errs.Testing, FileHeader)
 	}
 )
 
-func Archive[A Archiver](t errs2.Testing, w io.Writer, files ...FileHeader) {
-	t.Helper()
+func Archive[A Archiver](t errs.Testing, w io.Writer, files ...FileHeader) {
 	ww := (*new(A)).New(t, w)
-	defer errs2.Defer(t, ww.Close)
-	readDir(t, ww, files...)
+	defer errs.Defer(t, ww.Close)
+	readDir(t, ww, nil, files)
 }
 
-func readDir(t errs2.Testing, w Writer, files ...FileHeader) {
+func readDir(t errs.Testing, w Writer, path []string, files []FileHeader) {
 	for _, f := range files {
+		fn := Entry[[]byte]{
+			Name: strings.Join(append(path, f.EntryName()), "/"),
+			Time: f.EntryTime(),
+		}
 		switch f := f.(type) {
 		case entry[[]byte]:
-			w.WriteFile(t, f, bytes.NewReader(f.EntryContent()))
+			w.WriteFile(t, fn, bytes.NewReader(f.EntryContent()))
 		case entry[io.Reader]:
-			w.WriteFile(t, f, f.EntryContent())
+			w.WriteFile(t, fn, f.EntryContent())
 		case entry[[]FileHeader]:
-			w.WriteDir(t, f)
-			readDir(t, w, f.EntryContent()...)
+			w.WriteDir(t, fn)
+			readDir(t, w, append(path, f.EntryName()), f.EntryContent())
 		}
 	}
 }

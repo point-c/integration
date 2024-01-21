@@ -20,8 +20,16 @@ type (
 	}
 )
 
-func NewTestMain(m *testing.M) *TestMain              { return &TestMain{M: m} }
-func (t *TestMain) Exit()                             { os.Exit(t.code) }
+func NewTestMain(m *testing.M) *TestMain { return &TestMain{M: m} }
+func (t *TestMain) Exit() {
+	if r := recover(); r != nil {
+		if t.code == 0 {
+			t.code = 1
+		}
+		t.Logf("caught panic: %v", r)
+	}
+	os.Exit(t.code)
+}
 func (t *TestMain) Run()                              { t.code = t.M.Run() }
 func (t *TestMain) Helper()                           {}
 func (t *TestMain) Logf(s string, a ...any)           { slog.Info(fmt.Sprintf(s, a...)) }
