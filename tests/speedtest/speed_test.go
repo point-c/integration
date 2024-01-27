@@ -1,23 +1,18 @@
 package speedtest
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	_ "embed"
-	"encoding/json"
 	"fmt"
-	"github.com/librespeed/speedtest-cli/report"
-	"github.com/pkg/errors"
 	"github.com/point-c/integration/pkg/docker"
 	"github.com/point-c/integration/pkg/errs"
 	"github.com/point-c/integration/tests/speedtest/internal"
-	"github.com/stretchr/testify/require"
+	speedtest_srv "github.com/point-c/integration/tests/speedtest/internal/speedtest-srv/speedtest-srv"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"io"
 	"net"
-	"net/http"
+	"net/rpc"
 	"os"
 	"strings"
 	"testing"
@@ -46,6 +41,7 @@ func TestMain(m *testing.M) {
 
 	Ctx = docker.NewMainContext(t, fmt.Sprintf("reverse_proxy %s:80", SpeedTestServerName))
 	defer Ctx.Cancel()
+	defer collectAndDefer(t)()
 
 	go func() {
 		t := time.Tick(time.Second * 5)
@@ -81,153 +77,76 @@ func TestMain(m *testing.M) {
 	_, cleanup = Ctx.Client.StartContainer([]string{intNet.Name, speedtestServerNet.Name, speedtestCliClientNet.Name}, nil)
 	defer cleanup()
 
-	SpeedtestClientRequest = func(server int) testcontainers.ContainerRequest {
-		var netName, hostname string
-		switch server {
-		case ServerID:
-			hostname = Ctx.Server.Config.NetworkName
-			netName = speedtestCliServerNet.Name
-		case ClientID:
-			hostname = Ctx.Client.Config.NetworkName
-			netName = speedtestCliClientNet.Name
-		default:
-			errs.Check(t, fmt.Errorf("invalid id %d", server))
-		}
-
-		return testcontainers.ContainerRequest{
-			WaitingFor: wait.ForExposedPort(),
-			FromDockerfile: testcontainers.FromDockerfile{
-				Tag:            "speedtest-cli",
-				ContextArchive: internal.Context(t),
-				PrintBuildLog:  true,
-			},
-			Networks: []string{"localhost", netName},
-			Env: map[string]string{
-				"HOSTNAME": hostname,
-				"PORT":     "80",
-			},
-			ExposedPorts: []string{"8080/tcp"},
-		}
-	}
-
-	ctx, cancel := context.WithCancel(Ctx)
-	defer cancel()
-	resultsPrinted, resultsPrintedCancel := context.WithCancel(Ctx)
-	defer resultsPrintedCancel()
-	go func() {
-		defer resultsPrintedCancel()
-		var res []Report
-		for {
-			select {
-			case <-ctx.Done():
-				writeOutput(t, res, os.Stdout)
-				return
-			case r := <-Results:
-				res = append(res, r)
-			}
-		}
-	}()
-
+	SpeedtestClientRequest = SpeedtestClientRequestFn(t, speedtestCliServerNet.Name, speedtestCliClientNet.Name)
 	select {
 	case <-Ctx.Done():
 	default:
 		t.Run()
-		cancel()
-		<-resultsPrinted.Done()
 	}
 }
 
 func TestServer(t *testing.T) {
-	speedtest(t, ServerID, "Server")
+	speedtest(t, ServerID, "VPN", 3)
 }
 
 func TestClient(t *testing.T) {
-	speedtest(t, ClientID, "Client")
+	speedtest(t, ClientID, "Caddy", 3)
 }
 
-func speedtest(t *testing.T, id int, name string) {
+func speedtest(t *testing.T, id int, name string, count uint) {
 	c, cleanup := Ctx.GetContainer(SpeedtestClientRequest(id))
 	defer cleanup()
 
+	var hostname string
+	switch id {
+	case ServerID:
+		hostname = Ctx.Server.Config.NetworkName
+	case ClientID:
+		hostname = Ctx.Client.Config.NetworkName
+	}
+
 	ctx, cancel := context.WithCancel(Ctx)
 	defer cancel()
-	go func() {
-		logs := errs.Must(c.Logs(ctx))(t)
-		defer logs.Close()
-		r := bufio.NewReader(logs)
-		var buf bytes.Buffer
-		for {
-			line, isPrefix, err := r.ReadLine()
-			if errors.Is(err, io.EOF) {
+
+	serverInfo := speedtest_srv.ServerInfo{Name: name, Hostname: hostname, Port: 80}
+	for i := uint(0); i < count; i++ {
+		t.Run(fmt.Sprintf("speedtesting: %s %d", name, i+1), func(t *testing.T) {
+			rep := Report{Timestamp: time.Now(), Name: fmt.Sprintf("%s-%d", name, i+1)}
+			addr := fmt.Sprintf("localhost:%d", errs.Must(c.MappedPort(ctx, "8080/tcp"))(t).Int())
+			t.Logf("dialing speedtest server: %s", addr)
+			conn := errs.Must(new(net.Dialer).DialContext(Ctx, "tcp", addr))(t)
+			client := rpc.NewClient(conn)
+			defer errs.Defer(t, client.Close)
+
+			t.Run("ping", func(t *testing.T) {
+				var pingResp speedtest_srv.PingResponse
+				errs.Check(t, client.Call(speedtest_srv.MethodSpeedTestPing, speedtest_srv.PingRequest{ServerInfo: serverInfo}, &pingResp))
+				rep.Ping, rep.Jitter = pingResp.Ping, pingResp.Jitter
+			})
+			t.Run("download", func(t *testing.T) {
+				var sr speedtest_srv.SpeedResponse
+				errs.Check(t, client.Call(speedtest_srv.MethodSpeedTestDownload, speedtest_srv.DownloadRequest{ServerInfo: serverInfo}, &sr))
+				rep.Download = sr.Speed
+			})
+			t.Run("upload", func(t *testing.T) {
+				var sr speedtest_srv.SpeedResponse
+				errs.Check(t, client.Call(speedtest_srv.MethodSpeedTestUpload, speedtest_srv.UploadRequest{ServerInfo: serverInfo}, &sr))
+				rep.Upload = sr.Speed
+			})
+
+			select {
+			case Results <- rep:
+			case <-Ctx.Done():
 				return
 			}
-			errs.Check(t, err)
-			if isPrefix {
-				buf.Write(line)
-			} else {
-				buf.Write(line)
-				t.Log(buf.String())
-				buf.Reset()
-			}
-		}
-	}()
-
-	pr, pw := io.Pipe()
-	go func() {
-		defer pw.Close()
-		ti := time.NewTicker(time.Millisecond * 500)
-		defer ti.Stop()
-		for range ti.C {
-			if func() bool {
-				ctx, cancel := context.WithTimeout(ctx, time.Millisecond*500)
-				defer cancel()
-				req := errs.Must(http.NewRequestWithContext(ctx,
-					http.MethodGet,
-					fmt.Sprintf("http://localhost:%d", errs.Must(c.MappedPort(ctx, "8080/tcp"))(t).Int()),
-					nil,
-				))(t)
-				resp, err := http.DefaultClient.Do(req)
-				if errors.Is(err, context.DeadlineExceeded) || errors.As(err, new(*net.OpError)) {
-					return false
-				}
-				errs.Check(t, err)
-				defer resp.Body.Close()
-
-				switch resp.StatusCode {
-				case http.StatusOK:
-					errs.Must(io.Copy(pw, resp.Body))(t)
-					return true
-				case http.StatusTooEarly:
-				}
-				return false
-			}() {
-				return
-			}
-		}
-	}()
-
-	var r []Report
-	if err := json.NewDecoder(pr).Decode(&r); !errors.Is(err, io.EOF) {
-		errs.Check(t, err)
+		})
 	}
-	require.NotEmpty(t, r)
-	for i := range r {
-		r[i].name = name
-		select {
-		case Results <- r[i]:
-		case <-Ctx.Done():
-			return
-		}
-	}
-
-	var buf bytes.Buffer
-	writeOutput(t, r, &buf)
-	t.Log("\n" + buf.String())
 }
 
 type Report struct {
-	report.JSONReport
-	name string
+	Ping, Jitter, Upload, Download float64
+	Timestamp                      time.Time
+	Name                           string
 }
 
 func writeOutput(t errs.Testing, r []Report, w io.Writer) {
@@ -245,7 +164,7 @@ func writeOutput(t errs.Testing, r []Report, w io.Writer) {
 	}
 	writeRow()
 	for _, r := range r {
-		row.name = r.name
+		row.name = r.Name
 		row.ts = r.Timestamp.Format(time.RFC1123)
 		row.ping, row.jitter = fmtFloat(r.Ping), fmtFloat(r.Jitter)
 		row.upload, row.download = fmtFloat(r.Upload), fmtFloat(r.Download)
@@ -254,3 +173,54 @@ func writeOutput(t errs.Testing, r []Report, w io.Writer) {
 	errs.Check(t, tw.Flush())
 }
 func fmtFloat(f float64) string { return fmt.Sprintf("%.2f", f) }
+
+func SpeedtestClientRequestFn(t errs.Testing, serverNet, clientNet string) func(server int) testcontainers.ContainerRequest {
+	return func(server int) testcontainers.ContainerRequest {
+		var netName string
+		switch server {
+		case ServerID:
+			netName = serverNet
+		case ClientID:
+			netName = clientNet
+		default:
+			errs.Check(t, fmt.Errorf("invalid id %d", server))
+		}
+
+		return testcontainers.ContainerRequest{
+			WaitingFor: wait.ForLog(".*server started.*").AsRegexp(),
+			FromDockerfile: testcontainers.FromDockerfile{
+				Tag:            "speedtest-cli",
+				ContextArchive: internal.Context(t),
+				PrintBuildLog:  true,
+			},
+			Networks:     []string{"localhost", netName},
+			ExposedPorts: []string{"8080/tcp"},
+		}
+	}
+}
+
+func collectAndDefer(t errs.Testing) func() {
+	ctx, cancel := context.WithCancel(Ctx)
+	resultsPrinted, resultsPrintedCancel := context.WithCancel(Ctx)
+
+	var res []Report
+	go func() {
+		defer resultsPrintedCancel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case r := <-Results:
+				res = append(res, r)
+			}
+		}
+	}()
+
+	return func() {
+		defer func() {
+			<-resultsPrinted.Done()
+			writeOutput(t, res, os.Stdout)
+		}()
+		cancel()
+	}
+}

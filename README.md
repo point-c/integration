@@ -1,6 +1,6 @@
 # Integration Tests
 
-These tests build a proper stack of the point-c software and verify that it runs correctly.
+These tests build a Docker stack using Caddy and the [`point-c`](https://github.com/point-c/caddy) module to verify that it runs correctly.
 
 ## Tests
 
@@ -12,10 +12,8 @@ Downloads different amounts of random data. Data is downloaded directly from cad
 
 [`librespeed`](https://github.com/librespeed/speedtest) is leveraged to benchmark `point-c`'s speed. A direct connection to Caddy and a VPN connection are benchmarked.
 
-#### Results
+## Usage
 
 ```bash
-$ uname -a
-Linux laptop 6.1.0-16-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.67-1 (2023-12-12) x86_64 GNU/Linux
-$ 
+sudo go test -v ./tests/...
 ```

@@ -5,9 +5,7 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig"
 	_ "github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
-	_ "github.com/point-c/caddy"
-	_ "github.com/point-c/caddy-randhandler"
-	_ "github.com/point-c/caddy-wg"
+	_ "github.com/point-c/caddy/module"
 	"github.com/point-c/integration/pkg/errs"
 	"github.com/point-c/integration/pkg/templates"
 	"github.com/point-c/wgapi"
@@ -40,6 +38,7 @@ func TestCaddyfile(t *testing.T) {
 				Private:      clientPriv,
 				Public:       serverPub,
 				Shared:       shared,
+				Directive:    "route {\nrand\n}",
 			},
 			Exp: caddyconfig.JSON(Cfg{
 				Apps: CfgApps{
@@ -118,6 +117,11 @@ func TestCaddyfile(t *testing.T) {
 					},
 					PointC: CfgAppsPointc{
 						Networks: []any{
+							map[string]any{
+								"addr":     "0.0.0.0",
+								"hostname": "sys",
+								"type":     "system",
+							},
 							CfgAppsPointcNetworksServer{
 								Hostname:   serverName,
 								Ip:         serverIP.String(),
@@ -142,8 +146,8 @@ func TestCaddyfile(t *testing.T) {
 										Ports:   "80:80",
 									},
 								},
-								Host: clientName,
-								Op:   "forward",
+								Hosts: "sys:" + clientName,
+								Op:    "forward",
 							},
 						},
 					},
@@ -195,12 +199,13 @@ type (
 	}
 	CfgAppsPointcNetOpsForward struct {
 		Forwards []any  `json:"forwards"`
-		Host     string `json:"host"`
+		Hosts    string `json:"hosts"`
 		Op       string `json:"op"`
 	}
 	CfgAppsPointcNetOpsForwardTCP struct {
-		Forward string `json:"forward"`
-		Ports   string `json:"ports"`
+		Forward string    `json:"forward"`
+		Ports   string    `json:"ports"`
+		Buf     *struct{} `json:"buf"`
 	}
 	CfgAppsPointcNetworksServerPeer struct {
 		Hostname  string `json:"hostname"`
