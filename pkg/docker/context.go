@@ -1,3 +1,4 @@
+// Package docker assists with creating containers and networks for docker.
 package docker
 
 import (
@@ -24,6 +25,7 @@ const (
 	LogName        = "caddy.log"
 )
 
+// MainContext contains the overall context for the application and configs.
 type MainContext struct {
 	context.Context
 	cancel context.CancelFunc
@@ -33,6 +35,7 @@ type MainContext struct {
 	Now    time.Time
 }
 
+// NewMainContext creates a new context. clientDirective is passed to the client's Caddyfile as the handler for the `:80` route.
 func NewMainContext(t errs.Testing, clientDirective string) *MainContext {
 	_ = os.Mkdir("test_output", os.ModePerm)
 	ctx := MainContext{
@@ -69,6 +72,8 @@ func NewMainContext(t errs.Testing, clientDirective string) *MainContext {
 
 func (ctx *MainContext) Cancel() { ctx.cancel() }
 
+// WriteDebugZip writes information about the caddy processes for debugging.
+// The zip contains the server and client's caddyfile and dockerfile, along with any logs if they exist.
 func (ctx *MainContext) WriteDebugZip() {
 	f := errs.Must(os.Create(filepath.Join("test_output", ctx.Now.Format("2006-01-02T15:04:05Z07:00")+".zip")))(ctx.t)
 	defer errs.Defer(ctx.t, f.Close)
@@ -94,17 +99,25 @@ func (ctx *MainContext) WriteDebugZip() {
 	)
 }
 
+// GetInternalNet gets a docker network with no external connection.
 func (ctx *MainContext) GetInternalNet() (*testcontainers.DockerNetwork, func()) {
 	return ctx.GetNet(network.WithInternal())
 }
 
+// GetNet gets a network with the given options. Use the returned func to cleanup the container after usage.
 func (ctx *MainContext) GetNet(opts ...network.NetworkCustomizer) (*testcontainers.DockerNetwork, func()) {
 	c, cn := context.WithTimeout(ctx, time.Second*10)
 	defer cn()
 	internalNet := errs.Must(network.New(c, append(opts, network.WithCheckDuplicate(), network.WithAttachable())...))(ctx.t)
-	return internalNet, func() { errs.Check(ctx.t, internalNet.Remove(ctx)) }
+	return internalNet, func() {
+		c, cn := context.WithTimeout(context.Background(), time.Second*10)
+		defer cn()
+		errs.Check(ctx.t, internalNet.Remove(c))
+	}
 }
 
+// GetContainer creates a new docker container with the given request. The container will be started before returning.
+// Use cleanup to remove all container resources after running.
 func (ctx *MainContext) GetContainer(req testcontainers.ContainerRequest) (tc testcontainers.Container, cleanup func()) {
 	c, cn := context.WithTimeout(ctx, time.Minute*5)
 	defer cn()
@@ -121,6 +134,7 @@ func (ctx *MainContext) GetContainer(req testcontainers.ContainerRequest) (tc te
 }
 
 type (
+	// MainContextEntry is either a server or client definition.
 	MainContextEntry[D interface {
 		templates.Dot
 		NamedNetwork
@@ -131,11 +145,13 @@ type (
 		Config     D
 		Logs       lockedBuf
 	}
+	// NamedNetwork is used to specify the server and client data.
 	NamedNetwork interface {
 		GetNetworkName() string
 	}
 )
 
+// StartContainer starts the container specified by this configuration.
 func (mce *MainContextEntry[D]) StartContainer(networks []string, exposed []string, waitPort ...nat.Port) (testcontainers.Container, func()) {
 	// Generate dockerfile context
 	var buf bytes.Buffer

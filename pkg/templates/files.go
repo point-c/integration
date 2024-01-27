@@ -20,6 +20,7 @@ var (
 	CaddyfileServer string
 )
 
+// DeJSON helps decode json into a type.
 func DeJSON[T any](t errs.Testing, b []byte) (v T) {
 	errs.Check(t, json.NewDecoder(bytes.NewReader(b)).Decode(&v))
 	return

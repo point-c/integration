@@ -1,3 +1,4 @@
+// Package templates is responsible for managing the creating of caddyfiles through templates.
 package templates
 
 import (
@@ -14,6 +15,7 @@ import (
 	"text/template"
 )
 
+// NewDotPair produces a pair of configs for the server and the client.
 func NewDotPair(t errs.Testing) (DotClient, DotServer) {
 	serverPriv, serverPub := errs.Must2(wgapi.NewPrivatePublic())(t)
 	clientPriv, clientPub := errs.Must2(wgapi.NewPrivatePublic())(t)
@@ -38,11 +40,13 @@ func NewDotPair(t errs.Testing) (DotClient, DotServer) {
 		}
 }
 
+// Dot is something that provides context for a template.
 type Dot interface {
 	ApplyTemplate(errs.Testing) []byte
 }
 
 type (
+	// DotServer is a server template config.
 	DotServer struct {
 		NetworkName    string
 		FwdNetworkName string
@@ -51,6 +55,7 @@ type (
 		Private        wgapi.PrivateKey
 		Peers          []DotServerPeer
 	}
+	// DotServerPeer allows for configuring peers in the server caddyfile.
 	DotServerPeer struct {
 		NetworkName string
 		IP          net.IP
@@ -67,6 +72,7 @@ func (ds DotServer) GetNetworkName() string {
 	return ds.NetworkName
 }
 
+// DotClient is a client template config.
 type DotClient struct {
 	NetworkName  string
 	IP           net.IP
@@ -95,6 +101,7 @@ func (dd DotDockerfile) ApplyTemplate(t errs.Testing) []byte {
 	return ApplyTemplate(t, Dockerfile, dd)
 }
 
+// ApplyTemplate applies the given template to the given dot.
 func ApplyTemplate(t errs.Testing, tmpl string, dot any) []byte {
 	tm := errs.Must(template.New("").Funcs(template.FuncMap{
 		"txt": func(u encoding.TextMarshaler) string { return string(errs.Must(u.MarshalText())(t)) },

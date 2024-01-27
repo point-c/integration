@@ -6,7 +6,7 @@ require (
 	github.com/caddyserver/caddy/v2 v2.7.6
 	github.com/docker/go-connections v0.4.0
 	github.com/librespeed/speedtest-cli v1.0.10
-	github.com/point-c/caddy v0.0.17
+	github.com/point-c/caddy v0.1.0
 	github.com/point-c/simplewg v0.1.0
 	github.com/point-c/wgapi v0.1.0
 	github.com/stretchr/testify v1.8.4

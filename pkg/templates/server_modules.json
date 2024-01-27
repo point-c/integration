@@ -1,6 +1,6 @@
 {
   "caddy": "2.7.6",
   "mods": [
-    "github.com/point-c/caddy/module@v0.0.16"
+    "github.com/point-c/caddy/module@v0.1.0"
   ]
 }

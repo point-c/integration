@@ -218,3 +218,4 @@ Caddyfile
 *.env
 
 test_output/*
+.idea

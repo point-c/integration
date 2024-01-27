@@ -1,3 +1,4 @@
+// Package archive is a utility that allows for simple archiving of files.
 package archive
 
 import (
@@ -8,9 +9,12 @@ import (
 )
 
 type (
+	// Archiver is implemented by a compression method.
 	Archiver interface {
+		// New produces a new instance of this method.
 		New(errs.Testing, io.Writer) Writer
 	}
+	// Writer represents the archive being written.
 	Writer interface {
 		io.Closer
 		WriteFile(errs.Testing, FileHeader, io.Reader)
@@ -18,6 +22,7 @@ type (
 	}
 )
 
+// Archive is responsible for the actual archiving.
 func Archive[A Archiver](t errs.Testing, w io.Writer, files ...FileHeader) {
 	ww := (*new(A)).New(t, w)
 	defer errs.Defer(t, ww.Close)

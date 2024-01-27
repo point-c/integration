@@ -9,11 +9,13 @@ import (
 )
 
 type (
+	// Testing is implemented by testing.T and testing.B
 	Testing interface {
 		Helper()
 		Logf(string, ...any)
 		require.TestingT
 	}
+	// TestMain is a wrapper to help with testing a TestMain function.
 	TestMain struct {
 		*testing.M
 		code int
@@ -21,6 +23,7 @@ type (
 	}
 )
 
+// NewTestMain creates a new TestMain wrapping [testing.M].
 func NewTestMain(m *testing.M) *TestMain { return &TestMain{M: m} }
 func (t *TestMain) Exit() {
 	if !t.ok {
@@ -31,8 +34,18 @@ func (t *TestMain) Exit() {
 	}
 	os.Exit(t.code)
 }
-func (t *TestMain) Run()                              { t.code = t.M.Run(); t.ok = true }
-func (t *TestMain) Helper()                           {}
-func (t *TestMain) Logf(s string, a ...any)           { slog.Info(fmt.Sprintf(s, a...)) }
+
+// Run runs the tests saving the return code for exiting later.
+func (t *TestMain) Run() { t.code = t.M.Run(); t.ok = true }
+
+// Helper is a noop.
+func (t *TestMain) Helper() {}
+
+// Logf logs to [slog.Info].
+func (t *TestMain) Logf(s string, a ...any) { slog.Info(fmt.Sprintf(s, a...)) }
+
+// Errorf logs to [slog.Error].
 func (t *TestMain) Errorf(s string, a ...interface{}) { slog.Error(fmt.Sprintf(s, a...)) }
-func (t *TestMain) FailNow()                          { panic(nil) }
+
+// FailNow causes a nil panic.
+func (t *TestMain) FailNow() { panic(nil) }

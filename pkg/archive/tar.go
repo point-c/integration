@@ -8,6 +8,7 @@ import (
 	"os"
 )
 
+// Tar allows writing .tar archives.
 type Tar struct{}
 
 type tarWriter struct {

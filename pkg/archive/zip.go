@@ -8,6 +8,7 @@ import (
 	"os"
 )
 
+// Zip allows writing .zip archives.
 type Zip struct{}
 
 type zipWriter struct {
