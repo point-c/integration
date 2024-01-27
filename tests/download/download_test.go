@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"github.com/point-c/integration/pkg/cntx"
 	"github.com/point-c/integration/pkg/docker"
 	"github.com/point-c/integration/pkg/errs"
 	"github.com/point-c/simplewg"
@@ -16,45 +15,39 @@ import (
 	"time"
 )
 
-const (
-	StartupTimeout  = time.Minute * 2
-	ShutdownTimeout = time.Second * 5
-)
-
 var (
 	ServerPort uint16
 	ClientPort uint16
-	Ctx        *cntx.TC
+	Ctx        *docker.MainContext
 )
 
 func TestMain(m *testing.M) {
 	t := errs.NewTestMain(m)
 	defer t.Exit()
 
-	cfg := docker.NewMainContext(t, StartupTimeout, ShutdownTimeout, "route {\nrand\n}")
-	Ctx = cfg.Ctx
+	Ctx = docker.NewMainContext(t, "route {\nrand\n}")
 	defer Ctx.Cancel()
 
-	cfg.WriteDebugZip()
+	Ctx.WriteDebugZip()
 	go func() {
 		for range time.Tick(time.Second * 5) {
-			cfg.WriteDebugZip()
+			Ctx.WriteDebugZip()
 		}
 	}()
 
-	intNet, cleanup := cfg.GetInternalNet()
+	intNet, cleanup := Ctx.GetInternalNet()
 	defer cleanup()
 
 	networks := []string{"localhost", intNet.Name}
 	exposedPorts := []string{"80/tcp"}
-	server, cleanup := cfg.Server.StartContainer(networks, exposedPorts, "80/tcp")
+	server, cleanup := Ctx.Server.StartContainer(networks, exposedPorts, "80/tcp")
 	defer cleanup()
-	client, cleanup := cfg.Client.StartContainer(networks, exposedPorts, "80/tcp")
+	client, cleanup := Ctx.Client.StartContainer(networks, exposedPorts, "80/tcp")
 	defer cleanup()
 
-	ServerPort = uint16(errs.Must(server.MappedPort(Ctx.Starting(), "80/tcp"))(t).Int())
-	ClientPort = uint16(errs.Must(client.MappedPort(Ctx.Starting(), "80/tcp"))(t).Int())
-	require.NoError(t, Ctx.Starting().Err())
+	ServerPort = uint16(errs.Must(server.MappedPort(Ctx, "80/tcp"))(t).Int())
+	ClientPort = uint16(errs.Must(client.MappedPort(Ctx, "80/tcp"))(t).Int())
+	require.NoError(t, Ctx.Err())
 	t.Run()
 }
 
@@ -86,8 +79,8 @@ func TestDownload(t *testing.T) {
 		t.Run(fmt.Sprintf("requesting %s with seed of %s", sizeStr, seedStr), func(t *testing.T) {
 			var w simplewg.Wg
 			var clientR, serverR []byte
-			w.Go(func() { clientR = GetRandBytes(t, "client", Ctx.Starting(), ClientPort, seed, size) })
-			w.Go(func() { serverR = GetRandBytes(t, "server", Ctx.Starting(), ServerPort, seed, size) })
+			w.Go(func() { clientR = GetRandBytes(t, "client", Ctx, ClientPort, seed, size) })
+			w.Go(func() { serverR = GetRandBytes(t, "server", Ctx, ServerPort, seed, size) })
 			w.Wait()
 			require.Equal(t, clientR, serverR)
 		})

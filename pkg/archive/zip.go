@@ -19,7 +19,7 @@ func (Zip) New(t errs.Testing, w io.Writer) Writer {
 	return &zipWriter{t: t, w: zip.NewWriter(w)}
 }
 
-func (w *zipWriter) Close() error { w.t.Helper(); return w.w.Close() }
+func (w *zipWriter) Close() error { return w.w.Close() }
 
 func (w *zipWriter) WriteFile(t errs.Testing, f FileHeader, r io.Reader) {
 	errs.Must(io.Copy(errs.Must(w.w.CreateHeader(zipHeader(f, zip.Deflate, os.ModePerm)))(t), r))(t)

@@ -1,6 +1,7 @@
 {
     default_bind stub://0.0.0.0
     point-c {
+        system sys 0.0.0.0
         wgserver {{ .NetworkName }} {
             ip {{ .IP }}
             port {{ .Port }}
@@ -15,7 +16,7 @@
         }
     }
     point-c netops {
-        forward {{ .FwdNetworkName }} {
+        forward sys:{{ .FwdNetworkName }} {
             tcp 80:80
         }
     }

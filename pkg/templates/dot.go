@@ -22,7 +22,7 @@ func NewDotPair(t errs.Testing) (DotClient, DotServer) {
 	serverIP, clientIP := func(c uint8) (net.IP, net.IP) { return net.IPv4(192, 168, c, 1), net.IPv4(192, 168, c, 2) }(uint8(rand.Intn(math.MaxUint8) + 1))
 	return DotClient{
 			NetworkName:  clientName,
-			Endpoint:     serverIP.String(), // update to actual endpoint
+			Endpoint:     serverName,
 			IP:           clientIP,
 			EndpointPort: uint16(wgapi.DefaultListenPort),
 			Private:      clientPriv,

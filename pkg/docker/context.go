@@ -6,14 +6,15 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/docker/go-connections/nat"
 	"github.com/point-c/integration/pkg/archive"
-	"github.com/point-c/integration/pkg/cntx"
 	"github.com/point-c/integration/pkg/errs"
 	"github.com/point-c/integration/pkg/templates"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -38,12 +39,13 @@ func NewMainContext(t errs.Testing, clientDirective string) *MainContext {
 		t:   t,
 		Now: time.Now(),
 	}
+	ctx.Context, ctx.cancel = context.WithDeadline(context.Background(), TestingDeadline(t))
+
 	ctx.Client.p = &ctx
 	ctx.Server.p = &ctx
 	ctx.Client.Config, ctx.Server.Config = templates.NewDotPair(t)
-	ctx.Client.Config.Endpoint = ctx.Server.Config.NetworkName
-	ctx.Client.Config.EndpointPort = 51820
 	ctx.Client.Config.Directive = clientDirective
+
 	ctx.Client.Dockerfile, ctx.Server.Dockerfile = archive.Entry[[]byte]{
 		Name:    DockerfileName,
 		Time:    ctx.Now,
@@ -65,6 +67,8 @@ func NewMainContext(t errs.Testing, clientDirective string) *MainContext {
 	return &ctx
 }
 
+func (ctx *MainContext) Cancel() { ctx.cancel() }
+
 func (ctx *MainContext) WriteDebugZip() {
 	f := errs.Must(os.Create(filepath.Join("test_output", ctx.Now.Format("2006-01-02T15:04:05Z07:00")+".zip")))(ctx.t)
 	defer errs.Defer(ctx.t, f.Close)
@@ -75,8 +79,7 @@ func (ctx *MainContext) WriteDebugZip() {
 			Content: []archive.FileHeader{
 				ctx.Client.Caddyfile,
 				ctx.Client.Dockerfile,
-				//archive.Entry[[]byte]{Name: LogName, Time: ctx.Now, Content: ctx.Client.Logs.Bytes()},
-				archive.Entry[[]byte]{Name: LogName, Time: ctx.Now, Content: nil},
+				archive.Entry[[]byte]{Name: LogName, Time: ctx.Now, Content: ctx.Client.Logs.Bytes()},
 			},
 		},
 		archive.Entry[[]archive.FileHeader]{
@@ -85,8 +88,7 @@ func (ctx *MainContext) WriteDebugZip() {
 			Content: []archive.FileHeader{
 				ctx.Server.Caddyfile,
 				ctx.Server.Dockerfile,
-				//archive.Entry[[]byte]{Name: LogName, Time: ctx.Now, Content: ctx.Server.Logs.Bytes()},
-				archive.Entry[[]byte]{Name: LogName, Time: ctx.Now, Content: nil},
+				archive.Entry[[]byte]{Name: LogName, Time: ctx.Now, Content: ctx.Server.Logs.Bytes()},
 			},
 		},
 	)
@@ -96,97 +98,43 @@ func (ctx *MainContext) GetInternalNet() (*testcontainers.DockerNetwork, func())
 	return ctx.GetNet(network.WithInternal())
 }
 
-func (ctx *MainContext) GetNet(ctx context.Context, opts ...network.NetworkCustomizer) (*testcontainers.DockerNetwork, func()) {
-	internalNet := errs.Must(network.New(ctx.Ctx.Starting(), append(opts, network.WithCheckDuplicate(), network.WithAttachable())...))(ctx.t)
-	return internalNet, func() { errs.Check(ctx.t, internalNet.Remove(ctx.Ctx.Terminating())) }
+func (ctx *MainContext) GetNet(opts ...network.NetworkCustomizer) (*testcontainers.DockerNetwork, func()) {
+	c, cn := context.WithTimeout(ctx, time.Second*10)
+	defer cn()
+	internalNet := errs.Must(network.New(c, append(opts, network.WithCheckDuplicate(), network.WithAttachable())...))(ctx.t)
+	return internalNet, func() { errs.Check(ctx.t, internalNet.Remove(ctx)) }
 }
 
-type Container struct {
-	//lock    sync.RWMutex
-	//running bool
-	//b1, b2  bytes.Buffer
-	//w       io.Writer
-	C testcontainers.Container
-}
-
-//type containerLogs Container
-//
-//func (l *containerLogs) Accept(log testcontainers.Log) {
-//	l.lock.Lock()
-//	defer l.lock.Unlock()
-//	_, _ = l.w.Write(log.Content)
-//}
-
-//func (l *Container) Read(b []byte) (n int, err error) {
-//	for {
-//		running := func() bool {
-//			l.lock.RLock()
-//			defer l.lock.RUnlock()
-//			n, err = l.b1.Read(b)
-//			return l.running
-//		}()
-//		if !running || n > 0 || !errors.Is(err, io.EOF) {
-//			return
-//		}
-//		runtime.Gosched()
-//	}
-//}
-
-//func (l *Container) Bytes() []byte {
-//	l.lock.RLock()
-//	defer l.lock.RUnlock()
-//	return l.b2.Bytes()
-//}
-
-func (l *Container) StartContainer(t errs.Testing, ctx *cntx.TC, req testcontainers.ContainerRequest) (testcontainers.Container, func()) {
-	//l.lock.Lock()
-	//defer l.lock.Unlock()
-	//if l.running {
-	//	return l.C, func() {}
-	//}
-	//l.b1.Reset()
-	//l.b2.Reset()
-
-	//req.LifecycleHooks = append(req.LifecycleHooks, testcontainers.ContainerLifecycleHooks{
-	//	PostTerminates: []testcontainers.ContainerHook{func(context.Context, testcontainers.Container) error {
-	//		l.lock.Lock()
-	//		defer l.lock.Lock()
-	//		l.running = false
-	//		return nil
-	//	}},
-	//})
-
-	l.C = errs.Must(testcontainers.GenericContainer(ctx.Starting(), testcontainers.GenericContainerRequest{
+func (ctx *MainContext) GetContainer(req testcontainers.ContainerRequest) (tc testcontainers.Container, cleanup func()) {
+	c, cn := context.WithTimeout(ctx, time.Minute*5)
+	defer cn()
+	tc = errs.Must(testcontainers.GenericContainer(c, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
-	}))(t)
-	//l.running = true
-	// Start log reader after starting
-	//l.w = io.MultiWriter(&l.b1, &l.b2)
-	//l.C.FollowOutput((*containerLogs)(l))
-	// Starts its own goroutine
-	//ctxLogs, cancelLogs := context.WithCancel(ctx)
-	//errs.Check(t, l.C.StartLogProducer(ctxLogs))
-	return l.C, func() {
-		//cancelLogs()
-		ctx, cancel := context.WithTimeout(ctx.Terminating(), time.Second*10)
-		defer cancel()
-		to := time.Second * 5
-		errs.Check(t, l.C.Stop(ctx, &to))
-		errs.Check(t, l.C.Terminate(ctx))
+	}))(ctx.t)
+	return tc, func() {
+		c, cn := context.WithTimeout(context.Background(), time.Second*20)
+		defer cn()
+		to := time.Second * 10
+		errs.Check(ctx.t, tc.Stop(c, &to))
 	}
 }
 
-type MainContextEntry[D interface {
-	templates.Dot
-	GetNetworkName() string
-}] struct {
-	p          *MainContext
-	Dockerfile archive.Entry[[]byte]
-	Caddyfile  archive.Entry[[]byte]
-	Config     D
-	Logs       Container
-}
+type (
+	MainContextEntry[D interface {
+		templates.Dot
+		NamedNetwork
+	}] struct {
+		p          *MainContext
+		Dockerfile archive.Entry[[]byte]
+		Caddyfile  archive.Entry[[]byte]
+		Config     D
+		Logs       lockedBuf
+	}
+	NamedNetwork interface {
+		GetNetworkName() string
+	}
+)
 
 func (mce *MainContextEntry[D]) StartContainer(networks []string, exposed []string, waitPort ...nat.Port) (testcontainers.Container, func()) {
 	// Generate dockerfile context
@@ -201,7 +149,8 @@ func (mce *MainContextEntry[D]) StartContainer(networks []string, exposed []stri
 		waitFor = append(waitFor, wait.ForListeningPort(waitPort[0]))
 	}
 
-	return mce.Logs.StartContainer(mce.p.t, mce.p.Ctx, testcontainers.ContainerRequest{
+	logsCtx, logsCancel := context.WithCancel(mce.p)
+	c, cleanup := mce.p.GetContainer(testcontainers.ContainerRequest{
 		FromDockerfile: testcontainers.FromDockerfile{
 			ContextArchive: &buf,
 			PrintBuildLog:  true,
@@ -212,4 +161,36 @@ func (mce *MainContextEntry[D]) StartContainer(networks []string, exposed []stri
 		ExposedPorts: exposed,
 		WaitingFor:   wait.ForAll(waitFor...),
 	})
+	cleanup = func(f func()) func() { return func() { logsCancel(); f() } }(cleanup)
+
+	panicked := true
+	defer func() {
+		if panicked {
+			defer cleanup()
+		}
+	}()
+
+	go func() {
+		_, _ = io.Copy(&mce.Logs, errs.Must(c.Logs(logsCtx))(mce.p.t))
+	}()
+
+	panicked = false
+	return c, cleanup
+}
+
+type lockedBuf struct {
+	b bytes.Buffer
+	l sync.Mutex
+}
+
+func (l *lockedBuf) Bytes() []byte {
+	l.l.Lock()
+	defer l.l.Unlock()
+	return l.b.Bytes()
+}
+
+func (l *lockedBuf) Write(p []byte) (n int, err error) {
+	l.l.Lock()
+	defer l.l.Unlock()
+	return l.b.Write(p)
 }

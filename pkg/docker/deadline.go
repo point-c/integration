@@ -1,4 +1,4 @@
-package cntx
+package docker
 
 import (
 	"github.com/point-c/integration/pkg/errs"
@@ -8,11 +8,11 @@ import (
 
 const DefaultTestTimeout = time.Minute * 5
 
-func TestingDeadline(t errs.Testing) time.Duration {
+func TestingDeadline(t errs.Testing) time.Time {
 	if t, ok := t.(*testing.T); ok {
 		if d, ok := t.Deadline(); ok {
-			return d.Sub(time.Now())
+			return d
 		}
 	}
-	return DefaultTestTimeout
+	return time.Now().Add(DefaultTestTimeout)
 }
